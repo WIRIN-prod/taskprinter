@@ -5,6 +5,9 @@ services:
     restart: unless-stopped
     # BLE goes through the host's BlueZ daemon over the system D-Bus.
     network_mode: host
+    # Docker's default AppArmor profile blocks D-Bus calls to BlueZ ("AccessDenied ... AddMatch").
+    security_opt:
+      - apparmor:unconfined
     volumes:
       - /var/run/dbus:/var/run/dbus:ro
       - ./data:/data
