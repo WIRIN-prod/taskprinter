@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 import time
 from collections import deque
 from typing import Awaitable, Callable
@@ -20,6 +21,12 @@ log = logging.getLogger("taskprinter.printer")
 # unfiltered scan get cached as classic Bluetooth, and connecting then fails with
 # "BREDR.ProfileUnavailable". Other platforms ignore this argument.
 LE_ONLY = {"bluez": {"filters": {"Transport": "le"}}}
+
+def _adapter_off(exc: BaseException) -> bool:
+    """True when bleak/BlueZ failed because the Bluetooth adapter is switched off."""
+    text = f"{exc!r} {exc}"
+    return "POWERED_OFF" in text or "No powered Bluetooth adapters" in text or "org.bluez.Error.NotReady" in text
+
 
 EventSink = Callable[[str, dict], Awaitable[None] | None]
 Progress = Callable[[float], None]
@@ -161,7 +168,13 @@ class BlePrinter(BasePrinter):
 
         await self._set_state("scanning" if not self.connected else self.state)
         try:
-            found = await BleakScanner.discover(timeout=timeout, return_adv=True, **LE_ONLY)
+            try:
+                found = await BleakScanner.discover(timeout=timeout, return_adv=True, **LE_ONLY)
+            except Exception as exc:
+                if not (_adapter_off(exc) and await self._power_on_adapter()):
+                    raise
+                await asyncio.sleep(2)
+                found = await BleakScanner.discover(timeout=timeout, return_adv=True, **LE_ONLY)
         finally:
             if self.state == "scanning":
                 await self._set_state("connected" if self.connected else "disconnected")
@@ -231,8 +244,6 @@ class BlePrinter(BasePrinter):
                 self._spawn(self._event("printer", self.info()))
 
     async def connect(self, address: str | None = None) -> None:
-        from bleak import BleakClient
-
         if address and address != self.address:
             await self.disconnect()
             self.address = address
@@ -241,49 +252,89 @@ class BlePrinter(BasePrinter):
 
         self._loop = asyncio.get_running_loop()
         await self._set_state("connecting")
-        try:
-            device = await self._find_device()
-            if device is None:
-                raise RuntimeError("Printer not found. Is it on and disconnected from the phone app?")
-            client = BleakClient(device, disconnected_callback=self._on_disconnect,
-                                 timeout=self.cfg.connect_timeout)
-            await client.connect()
-            self.client = client
-            self.address = device.address
-            self.name = device.name or self.name
-            self._remember()
-
-            writable, notifiable = [], []
-            for service in client.services:
-                for char in service.characteristics:
-                    props = char.properties
-                    if "write" in props or "write-without-response" in props:
-                        writable.append(char)
-                    if "notify" in props or "indicate" in props:
-                        notifiable.append(char)
-            self.write_char = (
-                next((c for c in writable if c.uuid.lower() == protocol.WRITE_UUID), None)
-                or next((c for c in writable if c.uuid.lower().endswith(protocol.ALT_WRITE_SUFFIX)), None)
-                or (writable[0] if writable else None)
-            )
-            if self.write_char is None:
-                raise RuntimeError("No writable characteristic found on the printer")
-
-            # The printer treats the notify subscription as a "host is alive" signal.
-            for char in notifiable:
-                try:
-                    await client.start_notify(char, self._on_notify)
-                except Exception as exc:  # noqa: BLE001 - keep going with the others
-                    self._log(f"Notify subscribe failed on {char.uuid}: {exc}")
-
-            self._log(f"Connected to {self.name} ({self.address}), write {self.write_char.uuid}")
-            await self._set_state("connected", None)
-            await self._write(protocol.packet(protocol.Cmd.DEVICE_STATE, b"\x00"))
-        except Exception as exc:
-            await self._drop()
-            await self._set_state("error", str(exc))
-            raise
+        for attempt in (1, 2):
+            try:
+                await self._connect_once()
+                break
+            except Exception as exc:
+                await self._drop()
+                if attempt == 1 and _adapter_off(exc) and await self._power_on_adapter():
+                    await asyncio.sleep(2)
+                    continue
+                await self._set_state("error", str(exc))
+                raise
         self._schedule_idle()
+
+    async def _connect_once(self) -> None:
+        from bleak import BleakClient
+
+        device = await self._find_device()
+        if device is None:
+            raise RuntimeError("Printer not found. Is it on and disconnected from the phone app?")
+        client = BleakClient(device, disconnected_callback=self._on_disconnect,
+                             timeout=self.cfg.connect_timeout)
+        await client.connect()
+        self.client = client
+        self.address = device.address
+        self.name = device.name or self.name
+        self._remember()
+
+        writable, notifiable = [], []
+        for service in client.services:
+            for char in service.characteristics:
+                props = char.properties
+                if "write" in props or "write-without-response" in props:
+                    writable.append(char)
+                if "notify" in props or "indicate" in props:
+                    notifiable.append(char)
+        self.write_char = (
+            next((c for c in writable if c.uuid.lower() == protocol.WRITE_UUID), None)
+            or next((c for c in writable if c.uuid.lower().endswith(protocol.ALT_WRITE_SUFFIX)), None)
+            or (writable[0] if writable else None)
+        )
+        if self.write_char is None:
+            raise RuntimeError("No writable characteristic found on the printer")
+
+        # The printer treats the notify subscription as a "host is alive" signal.
+        for char in notifiable:
+            try:
+                await client.start_notify(char, self._on_notify)
+            except Exception as exc:  # noqa: BLE001 - keep going with the others
+                self._log(f"Notify subscribe failed on {char.uuid}: {exc}")
+
+        self._log(f"Connected to {self.name} ({self.address}), write {self.write_char.uuid}")
+        self.last_error = None
+        await self._set_state("connected")
+        await self._write(protocol.packet(protocol.Cmd.DEVICE_STATE, b"\x00"))
+
+    async def _power_on_adapter(self) -> bool:
+        """Switch the BlueZ adapter back on.
+
+        Cheap USB dongles can hang ("Controller not accepting commands"); the kernel then
+        resets them and BlueZ leaves them powered off until something turns them on again.
+        """
+        if not sys.platform.startswith("linux"):
+            return False
+        try:
+            from dbus_fast import BusType, Variant
+            from dbus_fast.aio import MessageBus
+
+            bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+            try:
+                root = await bus.introspect("org.bluez", "/org/bluez")
+                adapters = [node.name for node in root.nodes if node.name.startswith("hci")]
+                for name in adapters:
+                    path = f"/org/bluez/{name}"
+                    obj = bus.get_proxy_object("org.bluez", path, await bus.introspect("org.bluez", path))
+                    props = obj.get_interface("org.freedesktop.DBus.Properties")
+                    await props.call_set("org.bluez.Adapter1", "Powered", Variant("b", True))
+                    self._log(f"Bluetooth adapter {name} was off; switched it back on")
+                return bool(adapters)
+            finally:
+                bus.disconnect()
+        except Exception as exc:  # noqa: BLE001 - report and give up
+            self._log(f"Couldn't switch the Bluetooth adapter on: {exc}")
+            return False
 
     async def _drop(self) -> None:
         client, self.client, self.write_char = self.client, None, None
