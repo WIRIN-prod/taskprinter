@@ -1,0 +1,13 @@
+services:
+  taskprinter:
+    build: .
+    container_name: taskprinter
+    restart: unless-stopped
+    # BLE goes through the host's BlueZ daemon over the system D-Bus.
+    network_mode: host
+    volumes:
+      - /var/run/dbus:/var/run/dbus:ro
+      - ./data:/data
+    env_file: .env
+    environment:
+      TP_DATA_DIR: /data

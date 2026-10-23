@@ -1,0 +1,24 @@
+# systemd unit for running Task Printer directly on a Linux host (e.g. Raspberry Pi).
+#
+#   sudo cp deploy/taskprinter.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now taskprinter
+#   journalctl -u taskprinter -f
+#
+# Adjust User and WorkingDirectory to where you cloned the project.
+
+[Unit]
+Description=Task Printer (SC03h BLE mini printer server)
+After=network-online.target bluetooth.service
+Wants=network-online.target bluetooth.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/taskprinter
+ExecStart=/home/pi/taskprinter/.venv/bin/taskprinter serve
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

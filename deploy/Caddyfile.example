@@ -1,0 +1,10 @@
+# HTTPS reverse proxy. Browsers only install a PWA (and allow share-target) over HTTPS.
+# Replace the hostname; Caddy fetches a certificate automatically.
+# Set TP_COOKIE_SECURE=1 and TP_PUBLIC_URL=https://printer.example.com in .env.
+
+printer.example.com {
+	reverse_proxy 127.0.0.1:8080 {
+		# keep the live status stream (Server-Sent Events) unbuffered
+		flush_interval -1
+	}
+}
