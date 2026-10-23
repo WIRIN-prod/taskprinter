@@ -7,6 +7,7 @@ const state = {
   jobs: new Map(),
   printer: null,
   settings: null,
+  mode: "doc",
   previewAction: null,
   previewUrl: null,
 };
@@ -29,11 +30,11 @@ async function api(path, { method = "GET", json, form, raw = false } = {}) {
   try {
     res = await fetch(path, opts);
   } catch {
-    throw new ApiError(0, "Can't reach the server");
+    throw new ApiError(0, "Can't reach the printer server. Check that it's running and you're on the same network.");
   }
   if (res.status === 401) {
     showLogin();
-    throw new ApiError(401, "Please sign in");
+    throw new ApiError(401, "Sign in to continue.");
   }
   if (!res.ok) {
     let msg = res.statusText;
@@ -73,7 +74,7 @@ function timeAgo(ts) {
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
-  return new Date(ts * 1000).toLocaleDateString();
+  return new Date(ts * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
 const store = {  // per-device conveniences only; failures are harmless
@@ -81,25 +82,25 @@ const store = {  // per-device conveniences only; failures are harmless
   set(key, value) { try { localStorage.setItem(key, value); } catch { /* private mode */ } },
 };
 
-const copiesOf = (input) => Math.max(1, Math.min(20, +(input?.value || 1)));
-
 /* ---------------- navigation ---------------- */
 
 const VIEWS = ["print", "history", "printer"];
 
 function go(view) {
   $$(".view").forEach((v) => (v.hidden = v.id !== `view-${view}`));
-  $$(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.go === view));
+  $$("#tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.go === view));
   history.replaceState(null, "", view === "print" ? location.pathname + location.search : `#${view}`);
   if (view === "history") loadJobs();
   if (view === "printer") { loadSettings(); loadLog(); }
-  if (view === "print") loadTemplates();
+  if (view === "print") { loadTemplates(); schedulePreview(); }
   window.scrollTo({ top: 0 });
 }
 
 document.addEventListener("click", (e) => {
   const target = e.target.closest("[data-go]");
-  if (target) go(target.dataset.go);
+  if (!target) return;
+  e.preventDefault();
+  go(target.dataset.go);
 });
 
 window.addEventListener("hashchange", () => {
@@ -107,7 +108,7 @@ window.addEventListener("hashchange", () => {
   go(VIEWS.includes(view) ? view : "print");
 });
 
-/* ---------------- auth ---------------- */
+/* ---------------- sign in ---------------- */
 
 function showLogin() {
   const dlg = $("#loginDialog");
@@ -123,7 +124,7 @@ $("#loginForm").addEventListener("submit", async (e) => {
     $("#loginError").hidden = true;
     boot();
   } catch (err) {
-    $("#loginError").textContent = err.message;
+    $("#loginError").textContent = err.status === 401 ? "That token doesn't match TP_TOKEN on the server." : err.message;
     $("#loginError").hidden = false;
   }
 });
@@ -136,25 +137,28 @@ $("#logoutBtn").addEventListener("click", async () => {
 /* ---------------- printer status ---------------- */
 
 const STATE_LABEL = {
-  disconnected: "Idle", connecting: "Connecting…", connected: "Connected",
-  printing: "Printing…", scanning: "Scanning…", error: "Error",
+  disconnected: "Ready", connecting: "Connecting", connected: "Connected",
+  printing: "Printing", scanning: "Searching", error: "Can't reach printer",
 };
 
 function renderPrinter(p) {
   state.printer = p;
-  const pill = $("#statusPill");
-  pill.dataset.state = p.state;
   let text = STATE_LABEL[p.state] || p.state;
-  if (p.status?.battery) text += ` · ${p.status.battery}%`;
   if (p.status?.paper_out) text = "Out of paper";
-  $("#statusText").textContent = text;
+  const battery = p.status?.battery ? `${p.status.battery}%` : "";
 
-  $("#printerName").textContent = p.name || (p.backend === "mock" ? "Mock printer" : "Printer");
-  const meta = [p.address || "no printer selected", p.backend === "mock" ? "mock backend" : "Bluetooth LE"];
-  if (p.status?.battery) meta.push(`battery ${p.status.battery}%`);
-  $("#printerMeta").textContent = meta.join(" · ");
+  for (const node of [$("#statusPill"), $(".slot")]) node.dataset.state = p.state;
+  $("#statusText").textContent = text;
+  $("#batteryText").textContent = battery;
+  $("#batteryText").hidden = !battery;
+  $("#slotText").textContent = p.name ? `${p.name}, ${text.toLowerCase()}` : text;
+
+  $("#printerName").textContent = p.name || (p.backend === "mock" ? "Mock printer" : "No printer yet");
+  const meta = [p.address || "Found automatically when you print", p.backend === "mock" ? "mock backend" : "Bluetooth LE"];
+  if (battery) meta.push(`battery ${battery}`);
+  $("#printerMeta").textContent = meta.join(", ");
   $("#printerError").hidden = !p.error || p.state !== "error";
-  $("#printerError").textContent = p.error || "";
+  $("#printerError").textContent = p.error ? `Last error: ${p.error}` : "";
   $("#connectBtn").disabled = ["connected", "printing", "connecting"].includes(p.state);
   $("#disconnectBtn").disabled = !["connected", "error"].includes(p.state);
 }
@@ -162,7 +166,7 @@ function renderPrinter(p) {
 $("#connectBtn").addEventListener("click", async () => {
   try {
     renderPrinter(await api("/api/printer/connect", { method: "POST", json: {} }));
-    toast("Printer connected");
+    toast("Connected");
   } catch (err) { fail(err); }
 });
 
@@ -172,15 +176,17 @@ $("#disconnectBtn").addEventListener("click", () =>
 $("#scanBtn").addEventListener("click", async () => {
   const btn = $("#scanBtn");
   btn.disabled = true;
-  btn.textContent = "Scanning…";
+  btn.textContent = "Searching…";
   const list = $("#deviceList");
   list.replaceChildren();
   try {
     const devices = await api(`/api/printer/scan?show_all=${$("#scanAll").checked}`, { method: "POST" });
-    if (!devices.length) list.append(el("li", { class: "muted" }, "No printers found. Is it on and not connected to your phone?"));
+    if (!devices.length) {
+      list.append(el("li", { class: "hint" }, "No printers found. Turn the printer on and disconnect it from your phone, then search again."));
+    }
     for (const d of devices) {
-      list.append(el("li", { class: "device" },
-        el("div", {}, d.name, el("small", {}, `${d.address} · RSSI ${d.rssi ?? "?"}`)),
+      list.append(el("li", { class: "device-row" },
+        el("div", {}, d.name, el("small", {}, `${d.address}, signal ${d.rssi ?? "?"} dBm`)),
         el("button", {
           class: "btn", onclick: async () => {
             try {
@@ -189,19 +195,19 @@ $("#scanBtn").addEventListener("click", async () => {
               loadSettings();
             } catch (err) { fail(err); }
           },
-        }, "Use"),
+        }, "Use this printer"),
       ));
     }
   } catch (err) { fail(err); }
   btn.disabled = false;
-  btn.textContent = "Scan for printers";
+  btn.textContent = "Find printers";
 });
 
 async function loadLog() {
   try {
     const entries = await api("/api/printer/log");
     $("#printerLog").textContent = entries
-      .map((e) => `${new Date(e.t * 1000).toLocaleTimeString()}  ${e.msg}`).join("\n") || "(empty)";
+      .map((e) => `${new Date(e.t * 1000).toLocaleTimeString()}  ${e.msg}`).join("\n") || "Nothing logged yet.";
   } catch (err) { fail(err); }
 }
 $("#refreshLog").addEventListener("click", loadLog);
@@ -217,7 +223,7 @@ function fillForm(f, values) {
     const input = f.elements[k];
     if (!input) continue;
     if (input.type === "checkbox") input.checked = !!v;
-    else input.value = v ?? "";
+    else input.value = v ?? "";  // also works for radio groups
   }
 }
 
@@ -226,8 +232,8 @@ function readForm(f, keys) {
   for (const k of keys) {
     const input = f.elements[k];
     if (!input) continue;
-    out[k] = input.type === "checkbox" ? input.checked : input.type === "number" || input.type === "range"
-      ? +input.value : input.value;
+    out[k] = input.type === "checkbox" ? input.checked
+      : input.type === "number" || input.type === "range" ? +input.value : input.value;
   }
   return out;
 }
@@ -255,17 +261,17 @@ $("#settingsForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const body = readForm(e.target, TUNING_KEYS);
   body.printer_address = String(body.printer_address || "").trim();
-  saveSettings(body, "Settings saved");
+  saveSettings(body, "Print quality saved");
 });
 
 function showPaper(paper) {
   $("#layoutForm").paper.value = paper;
-  $$("#paperMode .chip").forEach((c) => c.classList.toggle("active", c.dataset.paper === paper));
+  $$("#paperMode button").forEach((b) => b.classList.toggle("active", b.dataset.paper === paper));
   $$("[data-for-paper]").forEach((n) => (n.hidden = n.dataset.forPaper !== paper));
 }
 $("#paperMode").addEventListener("click", (e) => {
-  const chip = e.target.closest("[data-paper]");
-  if (chip) showPaper(chip.dataset.paper);
+  const btn = e.target.closest("[data-paper]");
+  if (btn) showPaper(btn.dataset.paper);
 });
 $("#layoutForm").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -274,24 +280,25 @@ $("#layoutForm").addEventListener("submit", (e) => {
 
 /* live values beside range sliders */
 function syncValues(root = document) {
-  $$(".val[data-for]", root).forEach((span) => {
-    const input = span.closest("label").querySelector("input");
-    if (input) span.textContent = input.value;
+  $$("output[data-for]", root).forEach((out) => {
+    const input = out.closest("label").querySelector("input");
+    if (input) out.textContent = input.value;
   });
 }
 document.addEventListener("input", (e) => {
   if (e.target.type === "range") syncValues(e.target.closest("form") || document);
 });
 
-/* ---------------- preview dialog ---------------- */
+/* ---------------- dialog preview (test page) ---------------- */
 
-async function openPreview(fetchPreview, printAction) {
+async function openPreview(title, fetchPreview, printAction) {
   try {
     const res = await fetchPreview();
     const blob = await res.blob();
     if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
     state.previewUrl = URL.createObjectURL(blob);
     $("#previewImg").src = state.previewUrl;
+    $("#previewTitle").textContent = title;
     state.previewAction = printAction;
     $("#previewDialog").showModal();
   } catch (err) { fail(err); }
@@ -305,22 +312,13 @@ $("#previewPrint").addEventListener("click", async () => {
 
 function queued(job) {
   state.jobs.set(job.id, job);
-  toast(job.copies > 1 ? `Queued ${job.copies} copies` : `Queued: ${job.title}`);
+  toast(job.copies > 1 ? `Sent ${job.copies} copies to the printer` : "Sent to the printer");
+  const paper = $("#paper");
+  paper.classList.remove("feeding");
+  void paper.offsetWidth;  // restart the animation
+  paper.classList.add("feeding");
   return job;
 }
-
-/* ---------------- print modes ---------------- */
-
-function showMode(mode) {
-  $$("#printMode .chip").forEach((c) => c.classList.toggle("active", c.dataset.mode === mode));
-  $$("[data-pane]").forEach((p) => (p.hidden = p.dataset.pane !== mode));
-  store.set("tp-mode", mode);
-  if (mode === "doc") schedulePreview();
-}
-$("#printMode").addEventListener("click", (e) => {
-  const chip = e.target.closest("[data-mode]");
-  if (chip) showMode(chip.dataset.mode);
-});
 
 /* ---------------- formatting editor ---------------- */
 
@@ -343,7 +341,6 @@ function selectionNode() {
   return sel.rangeCount && editor.contains(sel.anchorNode) ? sel.anchorNode : null;
 }
 
-/* toolbar */
 function runCommand(cmd) {
   editor.focus();
   const node = selectionNode();
@@ -416,6 +413,7 @@ function updateToolbar() {
       on = cmd === { left: "justifyLeft", center: "justifyCenter", right: "justifyRight" }[align];
     }
     btn.classList.toggle("on", on);
+    btn.setAttribute("aria-pressed", String(on));
   }
   const block = closestIn(node, "h1,h2,h3,blockquote,pre");
   $("#blockType").value = block ? block.tagName.toLowerCase() : "p";
@@ -426,8 +424,7 @@ document.addEventListener("selectionchange", updateToolbar);
 editor.addEventListener("click", (e) => {
   const li = e.target.closest("ul.checklist > li");
   if (!li || e.target !== li) return;
-  const left = li.getBoundingClientRect().left;
-  if (e.clientX - left > 28) return;
+  if (e.clientX - li.getBoundingClientRect().left > 30) return;
   li.dataset.checked = li.dataset.checked === "true" ? "false" : "true";
   editorChanged();
 });
@@ -441,7 +438,6 @@ editor.addEventListener("paste", (e) => {
 });
 
 editor.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); printDoc(); }
   if (e.key === "Tab" && closestIn(selectionNode(), "li")) {
     e.preventDefault();
     document.execCommand(e.shiftKey ? "outdent" : "indent");
@@ -568,7 +564,7 @@ function serialize(source = editor) {
   return blocks;
 }
 
-/* print blocks -> editor DOM (for templates) */
+/* print blocks -> editor DOM (for saved templates) */
 function runsToNodes(runs = []) {
   return runs.map((r) => {
     let node = document.createTextNode(r.text);
@@ -622,50 +618,139 @@ function setEditor(blocks) {
   editorChanged();
 }
 
+$("#docClear").addEventListener("click", () => {
+  if (editor.textContent.trim() && !confirm("Clear everything in the editor?")) return;
+  editor.replaceChildren();
+  editorChanged();
+  editor.focus();
+});
+
 /* format panel */
 const formatForm = $("#formatForm");
 const FORMAT_KEYS = ["font", "size", "align", "line_spacing", "paragraph_spacing", "margin", "border",
   "invert", "timestamp"];
 const formatBody = () => readForm(formatForm, FORMAT_KEYS);
 
+const FONT_NAME = { sans: "Sans", serif: "Serif", mono: "Mono" };
+const BORDER_NAME = { line: "line border", double: "double border", dashed: "dashed border", rounded: "rounded border" };
+
+function describeFormat(f) {
+  const parts = [`${FONT_NAME[f.font] || "Sans"} ${f.size}`, `${f.align === "center" ? "centred" : f.align}`];
+  if (BORDER_NAME[f.border]) parts.push(BORDER_NAME[f.border]);
+  if (f.invert) parts.push("white on black");
+  if (!f.timestamp) parts.push("no date");
+  return parts.join(", ");
+}
+
+function formatChanged() {
+  const f = formatBody();
+  editor.dataset.font = f.font || "sans";
+  editor.style.textAlign = f.align || "left";
+  $("#formatSummary").textContent = describeFormat(f);
+}
+
 function applyFormat(fmt) {
   fillForm(formatForm, fmt);
   syncValues(formatForm);
-  editor.dataset.font = fmt.font || "sans";
-  editor.style.textAlign = fmt.align || "left";
+  formatChanged();
 }
 
 formatForm.addEventListener("input", () => {
-  editor.dataset.font = formatForm.font.value;
-  editor.style.textAlign = formatForm.align.value;
+  formatChanged();
   store.set("tp-format", JSON.stringify(formatBody()));
   schedulePreview();
 });
-$("#formatSave").addEventListener("click", () => saveSettings({ format: formatBody() }, "Saved as your default format"));
+$("#formatSave").addEventListener("click", () => saveSettings({ format: formatBody() }, "This is now your default format"));
 $("#formatReset").addEventListener("click", async () => {
   const s = await loadSettings();
   if (s) { applyFormat(s.format); store.set("tp-format", ""); schedulePreview(); }
 });
 
-/* live preview + print */
-const docBody = () => ({ blocks: serialize(), format: formatBody() });
+/* ---------------- print modes: every mode previews on the paper and prints from one button ---------------- */
+
+const imageForm = $("#imageForm");
+const qrForm = $("#qrForm");
+const bannerForm = $("#bannerForm");
+
+const MODES = {
+  doc: {
+    ready: () => serialize().length > 0,
+    empty: "Your print appears here as you type.",
+    body: () => ({ blocks: serialize(), format: formatBody() }),
+    preview: (body) => api("/api/preview/doc", { method: "POST", json: body, raw: true }),
+    print: (body, copies) => api("/api/print/doc", { method: "POST", json: { ...body, copies } }),
+  },
+  image: {
+    ready: () => !!imageForm.file.files[0],
+    empty: "Choose a picture to see how it prints.",
+    body: (copies = 1) => {
+      const f = imageForm;
+      const fd = new FormData();
+      fd.append("file", f.file.files[0]);
+      for (const k of ["dither", "threshold", "brightness", "contrast"]) fd.append(k, f[k].value);
+      fd.append("autolevel", f.autolevel.checked);
+      fd.append("rotate", f.rotate.checked);
+      fd.append("copies", copies);
+      return fd;
+    },
+    preview: () => api("/api/preview/image", { method: "POST", form: MODES.image.body(), raw: true }),
+    print: (_, copies) => api("/api/print/image", { method: "POST", form: MODES.image.body(copies) }),
+  },
+  qr: {
+    ready: () => qrForm.data.value.trim().length > 0,
+    empty: "Add a link or some text to make a QR code.",
+    body: () => ({ data: qrForm.data.value, caption: qrForm.caption.value, scale: +qrForm.scale.value }),
+    fill: (p) => { qrForm.data.value = p.data || ""; qrForm.caption.value = p.caption || ""; qrForm.scale.value = p.scale || 1; },
+    preview: (body) => api("/api/preview/qr", { method: "POST", json: body, raw: true }),
+    print: (body, copies) => api("/api/print/qr", { method: "POST", json: { ...body, copies } }),
+  },
+  banner: {
+    ready: () => bannerForm.text.value.trim().length > 0,
+    empty: "Type a few words for the banner.",
+    body: () => ({ text: bannerForm.text.value, font: bannerForm.font.value }),
+    preview: (body) => api("/api/preview/banner", { method: "POST", json: body, raw: true }),
+    print: (body, copies) => api("/api/print/banner", { method: "POST", json: { ...body, copies } }),
+  },
+};
+
+function showMode(mode) {
+  if (!MODES[mode]) mode = "doc";
+  state.mode = mode;
+  $$("#printMode button").forEach((b) => {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+  });
+  $$("[data-pane]").forEach((p) => (p.hidden = p.dataset.pane !== mode));
+  store.set("tp-mode", mode);
+  schedulePreview(0);
+}
+$("#printMode").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-mode]");
+  if (btn) showMode(btn.dataset.mode);
+});
 
 let previewTimer, previewSeq = 0;
-function schedulePreview() {
+function schedulePreview(delay = 450) {
   clearTimeout(previewTimer);
-  previewTimer = setTimeout(refreshPreview, 450);
+  $("#paper").classList.add("stale");
+  previewTimer = setTimeout(refreshPreview, delay);
 }
 
 async function refreshPreview() {
-  if ($("[data-pane='doc']").hidden) return;
-  const body = docBody();
-  const img = $("#docPreview");
-  $("#docPreviewEmpty").hidden = body.blocks.length > 0;
-  img.hidden = !body.blocks.length;
-  if (!body.blocks.length) return;
+  if ($("#view-print").hidden) return;
+  const mode = MODES[state.mode];
+  const img = $("#livePreview");
+  const paper = $("#paper");
+  const ready = mode.ready();
+  $("#paperEmpty").textContent = mode.empty;
+  $("#paperEmpty").hidden = ready;
+  img.hidden = !ready;
+  paper.classList.remove("stale");
+  if (!ready) return;
   const seq = ++previewSeq;
   try {
-    const res = await api("/api/preview/doc", { method: "POST", json: body, raw: true });
+    const res = await mode.preview(mode.body());
     const blob = await res.blob();
     if (seq !== previewSeq) return;  // a newer preview is on its way
     if (img.src) URL.revokeObjectURL(img.src);
@@ -673,141 +758,44 @@ async function refreshPreview() {
   } catch (err) { if (err.status !== 422) fail(err); }
 }
 
-async function printDoc() {
-  const body = docBody();
-  if (!body.blocks.length) { toast("Nothing to print yet"); editor.focus(); return; }
-  try {
-    queued(await api("/api/print/doc", { method: "POST", json: { ...body, copies: copiesOf($("#docCopies")) } }));
-  } catch (err) { fail(err); }
+for (const form of [imageForm, qrForm, bannerForm]) {
+  form.addEventListener("input", () => schedulePreview());
+  form.addEventListener("change", () => schedulePreview());
+  form.addEventListener("submit", (e) => { e.preventDefault(); printCurrent(); });
 }
-$("#docPrint").addEventListener("click", printDoc);
-$("#docClear").addEventListener("click", () => {
-  if (editor.textContent.trim() && !confirm("Clear the editor?")) return;
-  editor.replaceChildren();
-  editorChanged();
-  editor.focus();
+
+/* copies + print */
+const copiesInput = $("#copies");
+function copies() { return Math.max(1, Math.min(20, Math.round(+copiesInput.value || 1))); }
+function updatePrintLabel() {
+  const n = copies();
+  copiesInput.value = n;
+  $("#printBtn").textContent = n > 1 ? `Print ${n} copies` : "Print";
+}
+$("#copiesDown").addEventListener("click", () => { copiesInput.value = copies() - 1; updatePrintLabel(); });
+$("#copiesUp").addEventListener("click", () => { copiesInput.value = copies() + 1; updatePrintLabel(); });
+copiesInput.addEventListener("change", updatePrintLabel);
+
+async function printCurrent() {
+  const mode = MODES[state.mode];
+  if (!mode.ready()) { toast(mode.empty); return; }
+  const btn = $("#printBtn");
+  btn.disabled = true;
+  try {
+    queued(await mode.print(state.mode === "image" ? null : mode.body(), copies()));
+  } catch (err) { fail(err); }
+  btn.disabled = false;
+}
+$("#printBtn").addEventListener("click", printCurrent);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !$("#view-print").hidden) { e.preventDefault(); printCurrent(); }
 });
-$("#docSaveTemplate").addEventListener("click", () => saveTemplate("doc", docBody()));
 
-/* ---------------- QR and banner ---------------- */
-
-const SIMPLE_MODES = {
-  qr: {
-    form: "#qrForm",
-    body: (f) => ({ data: f.data.value, caption: f.caption.value, scale: +f.scale.value }),
-    fill: (f, p) => { f.data.value = p.data || ""; f.caption.value = p.caption || ""; f.scale.value = p.scale || 1; },
-  },
-  banner: {
-    form: "#bannerForm",
-    body: (f) => ({ text: f.text.value, font: f.font.value }),
-  },
-};
-
-for (const [mode, m] of Object.entries(SIMPLE_MODES)) {
-  const f = $(m.form);
-  const print = async () => {
-    try { queued(await api(`/api/print/${mode}`, { method: "POST", json: { ...m.body(f), copies: copiesOf(f.copies) } })); }
-    catch (err) { fail(err); }
-  };
-  f.addEventListener("submit", (e) => { e.preventDefault(); print(); });
-  $("[data-preview]", f).addEventListener("click", () => {
-    if (!f.reportValidity()) return;
-    openPreview(() => api(`/api/preview/${mode}`, { method: "POST", json: m.body(f), raw: true }), print);
-  });
-  $("[data-save-template]", f)?.addEventListener("click", () => {
-    if (f.reportValidity()) saveTemplate(mode, m.body(f));
-  });
-}
-
-/* ---------------- templates ---------------- */
-
-async function saveTemplate(kind, payload) {
-  if (kind === "doc" && !payload.blocks.length) { toast("Nothing to save yet"); return; }
-  const name = prompt("Template name");
-  if (!name?.trim()) return;
-  try {
-    await api("/api/templates", { method: "POST", json: { name: name.trim(), kind, payload } });
-    toast(`Saved template "${name.trim()}"`);
-    loadTemplates();
-  } catch (err) { fail(err); }
-}
-
-function loadTemplate(t) {
-  if (t.kind === "doc") {
-    showMode("doc");
-    setEditor(t.payload.blocks);
-    if (t.payload.format) applyFormat({ ...formatBody(), ...t.payload.format });
-  } else if (SIMPLE_MODES[t.kind]?.fill) {
-    showMode(t.kind);
-    SIMPLE_MODES[t.kind].fill($(SIMPLE_MODES[t.kind].form), t.payload);
-    syncValues($(SIMPLE_MODES[t.kind].form));
-  } else {
-    toast("This template can only be printed");
-    return;
-  }
-  toast(`Loaded "${t.name}"`);
-}
-
-const KIND_LABEL = { doc: "text", note: "note", qr: "QR label" };
-
-async function loadTemplates() {
-  try {
-    const templates = await api("/api/templates");
-    $("#templatesCard").hidden = !templates.length;
-    $("#templateList").replaceChildren(...templates.map((t) => el("li", { class: "template" },
-      el("button", { class: "template-name", title: "Load into the editor", onclick: () => loadTemplate(t) },
-        el("small", {}, KIND_LABEL[t.kind] || t.kind), t.name),
-      el("button", { class: "btn ghost", title: "Print now", onclick: async () => {
-        try { queued(await api(`/api/templates/${t.id}/print`, { method: "POST" })); } catch (err) { fail(err); }
-      } }, "Print"),
-      el("button", { class: "icon-btn", "aria-label": "Delete template", onclick: async () => {
-        if (!confirm(`Delete template "${t.name}"?`)) return;
-        try { await api(`/api/templates/${t.id}`, { method: "DELETE" }); loadTemplates(); } catch (err) { fail(err); }
-      } }, "✕"),
-    )));
-  } catch (err) { fail(err); }
-}
-
-/* ---------------- image ---------------- */
-
-const imageForm = $("#imageForm");
-function imageFormData() {
-  const f = imageForm;
-  const fd = new FormData();
-  fd.append("file", f.file.files[0]);
-  for (const k of ["dither", "threshold", "brightness", "contrast"]) fd.append(k, f[k].value);
-  fd.append("autolevel", f.autolevel.checked);
-  fd.append("rotate", f.rotate.checked);
-  fd.append("copies", copiesOf(f.copies));
-  return fd;
-}
-
-let imageTimer;
-function scheduleImagePreview() {
-  clearTimeout(imageTimer);
-  if (!imageForm.file.files[0]) return;
-  imageTimer = setTimeout(async () => {
-    try {
-      const res = await api("/api/preview/image", { method: "POST", form: imageFormData(), raw: true });
-      const img = $("#imagePreview");
-      if (img.src) URL.revokeObjectURL(img.src);
-      img.src = URL.createObjectURL(await res.blob());
-      img.hidden = false;
-    } catch (err) { fail(err); }
-  }, 350);
-}
-imageForm.addEventListener("change", scheduleImagePreview);
-imageForm.addEventListener("input", (e) => { if (e.target.type === "range") scheduleImagePreview(); });
+/* image picking */
 imageForm.file.addEventListener("change", () => {
   const file = imageForm.file.files[0];
-  $("#dropText").textContent = file ? file.name : "Choose, drop or paste a picture";
+  $("#dropText").textContent = file ? file.name : "Choose a picture, drop it here or paste it";
 });
-imageForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!imageForm.file.files[0]) return;
-  try { queued(await api("/api/print/image", { method: "POST", form: imageFormData() })); } catch (err) { fail(err); }
-});
-
 const drop = $("#dropZone");
 ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
@@ -817,8 +805,6 @@ drop.addEventListener("drop", (e) => {
   imageForm.file.files = e.dataTransfer.files;
   imageForm.file.dispatchEvent(new Event("change", { bubbles: true }));
 });
-
-/* paste an image anywhere on the Print tab */
 document.addEventListener("paste", (e) => {
   if ($("#view-print").hidden) return;
   const file = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith("image/"));
@@ -831,13 +817,72 @@ document.addEventListener("paste", (e) => {
   imageForm.file.dispatchEvent(new Event("change", { bubbles: true }));
 });
 
-$("#testBtn").addEventListener("click", () => openPreview(
+$("#testBtn").addEventListener("click", () => openPreview("Test page",
   () => api("/api/preview/test", { raw: true }),
   async () => { try { queued(await api("/api/print/test", { method: "POST" })); } catch (err) { fail(err); } },
 ));
 $("#feedBtn").addEventListener("click", async () => {
-  try { queued(await api("/api/print/feed", { method: "POST", json: { amount: 20 } })); } catch (err) { fail(err); }
+  try {
+    await api("/api/print/feed", { method: "POST", json: { amount: 20 } });
+    toast("Feeding paper");
+  } catch (err) { fail(err); }
 });
+
+/* ---------------- saved templates ---------------- */
+
+async function saveTemplate(kind, payload) {
+  const name = prompt("Name this so you can find it later");
+  if (!name?.trim()) return;
+  try {
+    await api("/api/templates", { method: "POST", json: { name: name.trim(), kind, payload } });
+    toast(`Saved "${name.trim()}"`);
+    loadTemplates();
+  } catch (err) { fail(err); }
+}
+$("#docSaveTemplate").addEventListener("click", () => {
+  if (!MODES.doc.ready()) { toast("Write something first, then save it."); return; }
+  saveTemplate("doc", MODES.doc.body());
+});
+$("[data-save-template]", qrForm).addEventListener("click", () => {
+  if (qrForm.reportValidity()) saveTemplate("qr", MODES.qr.body());
+});
+
+function loadTemplate(t) {
+  if (t.kind === "doc") {
+    showMode("doc");
+    setEditor(t.payload.blocks);
+    if (t.payload.format) applyFormat({ ...formatBody(), ...t.payload.format });
+  } else if (MODES[t.kind]?.fill) {
+    showMode(t.kind);
+    MODES[t.kind].fill(t.payload);
+    syncValues($(`[data-pane="${t.kind}"]`));
+    schedulePreview(0);
+  } else {
+    toast("This one can only be printed, not edited.");
+    return;
+  }
+  toast(`Opened "${t.name}"`);
+}
+
+const KIND_LABEL = { doc: "Text", note: "Note", qr: "QR" };
+
+async function loadTemplates() {
+  try {
+    const templates = await api("/api/templates");
+    $("#templatesCard").hidden = !templates.length;
+    $("#templateList").replaceChildren(...templates.map((t) => el("li", { class: "template" },
+      el("button", { class: "template-name", title: "Open in the editor", onclick: () => loadTemplate(t) },
+        el("small", {}, KIND_LABEL[t.kind] || t.kind), t.name),
+      el("button", { class: "btn quiet", title: `Print ${t.name}`, onclick: async () => {
+        try { queued(await api(`/api/templates/${t.id}/print`, { method: "POST" })); } catch (err) { fail(err); }
+      } }, "Print"),
+      el("button", { class: "icon-btn", "aria-label": `Delete ${t.name}`, title: "Delete", onclick: async () => {
+        if (!confirm(`Delete "${t.name}"?`)) return;
+        try { await api(`/api/templates/${t.id}`, { method: "DELETE" }); loadTemplates(); } catch (err) { fail(err); }
+      } }, "✕"),
+    )));
+  } catch (err) { fail(err); }
+}
 
 /* ---------------- history ---------------- */
 
@@ -852,31 +897,38 @@ async function loadJobs() {
 function renderJobs() {
   const jobs = [...state.jobs.values()].sort((a, b) => b.id - a.id);
   $("#jobList").replaceChildren(...jobs.map(jobItem));
+  $("#jobList").hidden = !jobs.length;
   $("#jobsEmpty").hidden = jobs.length > 0;
 }
+
+const STATUS_WORD = { queued: "Waiting", printing: "Printing", done: "Printed", failed: "Didn't print", cancelled: "Cancelled" };
+const KIND_WORD = { doc: "Text", note: "Note", image: "Image", qr: "QR code", banner: "Banner", test: "Test page",
+  feed: "Paper feed", checklist: "Checklist", task: "Task", digest: "Daily list" };
 
 function jobItem(job) {
   const actions = [];
   if (job.status === "queued") {
-    actions.push(el("button", { class: "btn ghost", onclick: () =>
+    actions.push(el("button", { class: "btn quiet", onclick: () =>
       api(`/api/jobs/${job.id}/cancel`, { method: "POST" }).then(updateJob).catch(fail) }, "Cancel"));
   } else if (job.kind !== "feed" && job.status !== "printing") {
-    actions.push(el("button", { class: "btn ghost", onclick: () =>
+    actions.push(el("button", { class: "btn quiet", onclick: () =>
       api(`/api/jobs/${job.id}/reprint`, { method: "POST" }).then(queued).then(renderJobs).catch(fail) }, "Reprint"));
   }
   const thumb = job.kind === "feed"
-    ? el("div", { class: "muted" }, "⇣")
+    ? el("div", { class: "thumb-feed", "aria-hidden": "true" }, "↓")
     : el("img", { src: `/api/jobs/${job.id}/preview.png`, alt: "", loading: "lazy" });
   return el("li", { class: "job", id: `job-${job.id}` },
     thumb,
     el("div", {},
       el("div", { class: "job-title" }, job.title),
       el("div", { class: "job-meta" },
-        el("span", { class: `status ${job.status}` }, job.status), ` · ${job.kind} · ${timeAgo(job.created_at)}`),
+        el("span", { class: `status-word ${job.status}` }, STATUS_WORD[job.status] || job.status),
+        el("span", {}, KIND_WORD[job.kind] || job.kind),
+        el("span", {}, timeAgo(job.created_at))),
       job.error ? el("div", { class: "error-text" }, job.error) : null,
       job.status === "printing" ? el("div", { class: "progress" }, el("div", { style: `width:${Math.round((job.progress || 0) * 100)}%` })) : null,
     ),
-    el("div", { class: "actions" }, actions),
+    el("div", { class: "row-actions" }, actions),
   );
 }
 
@@ -885,8 +937,8 @@ function updateJob(job) {
   state.jobs.set(job.id, { ...prev, ...job });
   if (!$("#view-history").hidden) renderJobs();
   if (prev && prev.status !== job.status) {
-    if (job.status === "done") toast(`Printed: ${job.title}`);
-    if (job.status === "failed") toast(`Print failed: ${job.error || job.title}`, "error", 6000);
+    if (job.status === "done") toast(`Printed ${job.title}`);
+    if (job.status === "failed") toast(`Didn't print: ${job.error || job.title}`, "error", 6000);
   }
 }
 
@@ -900,7 +952,7 @@ function connectEvents() {
   source.addEventListener("printer", (e) => renderPrinter(JSON.parse(e.data)));
   source.addEventListener("job", (e) => updateJob(JSON.parse(e.data)));
   source.onerror = () => {
-    // EventSource retries by itself; if we're logged out, stop hammering.
+    // EventSource retries by itself; if we're signed out, stop hammering.
     if (source.readyState === EventSource.CLOSED) setTimeout(connectEvents, 5000);
   };
 }
@@ -909,7 +961,7 @@ function connectEvents() {
 
 async function handleShareTarget() {
   const params = new URLSearchParams(location.search);
-  if (params.has("shared")) toast("Shared item queued for printing");
+  if (params.has("shared")) toast("Shared item sent to the printer");
   if (!params.has("share-target") || !("caches" in window)) return;
   try {
     const cache = await caches.open("share-target");
@@ -918,9 +970,9 @@ async function handleShareTarget() {
     await cache.delete("/shared-payload");
     const fd = await res.formData();
     const r = await fetch("/share", { method: "POST", body: fd, credentials: "same-origin" });
-    if (r.ok && !r.url.includes("login")) toast("Shared item queued for printing");
+    if (r.ok && !r.url.includes("login")) toast("Shared item sent to the printer");
     else showLogin();
-  } catch (err) { toast(`Share failed: ${err.message}`, "error"); }
+  } catch (err) { toast(`Couldn't print the shared item: ${err.message}`, "error"); }
 }
 
 /* ---------------- PWA install ---------------- */
@@ -955,7 +1007,7 @@ async function boot() {
   try {
     me = await api("/api/me");
   } catch (err) { fail(err); return; }
-  $("#versionText").textContent = `v${me.version}`;
+  $("#versionText").textContent = `Version ${me.version}`;
   $("#logoutBtn").hidden = !me.auth_required;
   if (!me.authenticated) { showLogin(); return; }
 
@@ -966,15 +1018,15 @@ async function boot() {
   applyFormat(fmt);
   const draft = store.get("tp-draft");
   if (draft && !editor.childNodes.length) editor.innerHTML = draft;
-  editorChanged();
+  editor.classList.toggle("empty", !editor.textContent.trim());
   loadTemplates();
   await handleShareTarget();
 
   const params = new URLSearchParams(location.search);
   if (params.size) history.replaceState(null, "", location.pathname + location.hash);
   const view = location.hash.slice(1);
+  showMode(store.get("tp-mode") || "doc");
   if (VIEWS.includes(view) && view !== "print") go(view);
-  else showMode(store.get("tp-mode") || "doc");
 }
 
 boot();

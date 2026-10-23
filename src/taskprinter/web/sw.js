@@ -1,5 +1,5 @@
 /* Task Printer service worker: offline app shell + Web Share Target. */
-const VERSION = "tp-v3";
+const VERSION = "tp-v4";
 const SHELL = [
   "/",
   "/static/styles.css",

@@ -4,116 +4,137 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Task Printer</title>
-  <meta name="description" content="Print formatted notes, pictures and labels on your mini printer">
-  <meta name="theme-color" content="#1f2937">
+  <meta name="description" content="Print notes, checklists, pictures and labels on your mini printer">
+  <meta name="theme-color" content="#E3EBE8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141C1A" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" href="/icons/icon-96.png">
   <link rel="apple-touch-icon" href="/icons/icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,600;0,800;1,400&display=swap">
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <img src="/icons/icon-96.png" alt="" width="28" height="28">
+  <header class="appbar">
+    <a class="wordmark" href="/" data-go="print">
+      <img src="/icons/icon-96.png" alt="" width="30" height="30">
       <span>Task Printer</span>
-    </div>
-    <button class="status-pill" id="statusPill" data-go="printer" title="Printer status">
-      <span class="dot"></span><span id="statusText">…</span>
+    </a>
+    <nav class="tabs" id="tabbar" aria-label="Sections">
+      <button data-go="print" class="active">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/></svg>
+        <span>Print</span>
+      </button>
+      <button data-go="history">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg>
+        <span>History</span>
+      </button>
+      <button data-go="printer">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        <span>Printer</span>
+      </button>
+    </nav>
+    <button class="status" id="statusPill" data-go="printer" title="Printer settings">
+      <span class="lamp" aria-hidden="true"></span>
+      <span id="statusText">Checking…</span>
+      <span class="battery" id="batteryText" hidden></span>
     </button>
   </header>
 
-  <div class="offline-banner" id="offlineBanner" hidden>You're offline. Printing needs a connection to your server.</div>
+  <div class="offline-banner" id="offlineBanner" hidden>You're offline. Reconnect to your server to print.</div>
 
   <main>
     <!-- PRINT -->
-    <section class="view" id="view-print">
-      <div class="chips segmented" id="printMode">
-        <button class="chip active" data-mode="doc">Text</button>
-        <button class="chip" data-mode="image">Image</button>
-        <button class="chip" data-mode="qr">QR label</button>
-        <button class="chip" data-mode="banner">Banner</button>
-      </div>
-
-      <div class="card templates" id="templatesCard" hidden>
-        <h2>Templates</h2>
-        <ul class="template-list" id="templateList"></ul>
-      </div>
-
-      <!-- Text: formatting editor -->
-      <div class="stack" data-pane="doc">
-        <div class="card editor-card">
-          <div class="toolbar-fmt" id="toolbar" role="toolbar" aria-label="Formatting">
-            <select id="blockType" aria-label="Paragraph style" title="Paragraph style">
-              <option value="p">Paragraph</option>
-              <option value="h1">Heading 1</option>
-              <option value="h2">Heading 2</option>
-              <option value="h3">Heading 3</option>
-              <option value="blockquote">Quote</option>
-              <option value="pre">Code block</option>
-            </select>
-            <span class="sep"></span>
-            <button type="button" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
-            <button type="button" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
-            <button type="button" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
-            <button type="button" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
-            <button type="button" data-cmd="code" title="Inline code"><code>&lt;/&gt;</code></button>
-            <span class="sep"></span>
-            <button type="button" data-cmd="insertUnorderedList" title="Bullet list">•≡</button>
-            <button type="button" data-cmd="insertOrderedList" title="Numbered list">1.</button>
-            <button type="button" data-cmd="checklist" title="Checklist (click a box to tick it)">☐</button>
-            <button type="button" data-cmd="outdent" title="Outdent list item">⇤</button>
-            <button type="button" data-cmd="indent" title="Indent list item">⇥</button>
-            <span class="sep"></span>
-            <button type="button" data-cmd="justifyLeft" title="Align left">⯇</button>
-            <button type="button" data-cmd="justifyCenter" title="Centre">≡</button>
-            <button type="button" data-cmd="justifyRight" title="Align right">⯈</button>
-            <span class="sep"></span>
-            <button type="button" data-cmd="insertHorizontalRule" title="Divider">―</button>
-            <button type="button" data-cmd="removeFormat" title="Clear formatting">⌫</button>
-          </div>
-          <div class="editor" id="editor" contenteditable="true" spellcheck="true"
-               data-placeholder="Type here… use the toolbar for headings, bold, lists and tick boxes."></div>
-          <div class="actions spread">
-            <button type="button" class="btn ghost" id="docClear">Clear</button>
-            <div class="actions">
-              <button type="button" class="btn ghost" id="docSaveTemplate">Save as template</button>
-              <label class="copies">Copies <input type="number" id="docCopies" min="1" max="20" value="1"></label>
-              <button type="button" class="btn primary" id="docPrint" title="Print (Ctrl+Enter)">Print</button>
-            </div>
-          </div>
+    <section class="view print-view" id="view-print">
+      <div class="compose">
+        <div class="modes" id="printMode" role="tablist" aria-label="What to print">
+          <button role="tab" class="active" data-mode="doc">Text</button>
+          <button role="tab" data-mode="image">Image</button>
+          <button role="tab" data-mode="qr">QR code</button>
+          <button role="tab" data-mode="banner">Banner</button>
         </div>
 
-        <details class="card" id="formatCard" open>
-          <summary>Format</summary>
-          <form class="stack format-form" id="formatForm">
-            <div class="grid2">
-              <label>Font
-                <select name="font">
-                  <option value="sans">Sans</option>
-                  <option value="serif">Serif</option>
-                  <option value="mono">Monospace</option>
-                </select>
-              </label>
-              <label>Default alignment
-                <select name="align">
-                  <option value="left">Left</option>
-                  <option value="center">Centre</option>
-                  <option value="right">Right</option>
-                </select>
-              </label>
-              <label>Text size <span class="val" data-for="size"></span>
+        <div class="saved" id="templatesCard" hidden>
+          <h2>Saved</h2>
+          <ul class="template-list" id="templateList"></ul>
+        </div>
+
+        <!-- Text -->
+        <div class="pane" data-pane="doc">
+          <div class="sheet-surface">
+            <div class="toolbar-fmt" id="toolbar" role="toolbar" aria-label="Formatting">
+              <select id="blockType" aria-label="Paragraph style" title="Paragraph style">
+                <option value="p">Paragraph</option>
+                <option value="h1">Heading 1</option>
+                <option value="h2">Heading 2</option>
+                <option value="h3">Heading 3</option>
+                <option value="blockquote">Quote</option>
+                <option value="pre">Code block</option>
+              </select>
+              <span class="sep"></span>
+              <button type="button" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold"><b>B</b></button>
+              <button type="button" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic"><i>I</i></button>
+              <button type="button" data-cmd="underline" title="Underline (Ctrl+U)" aria-label="Underline"><u>U</u></button>
+              <button type="button" data-cmd="strikeThrough" title="Strikethrough" aria-label="Strikethrough"><s>S</s></button>
+              <button type="button" data-cmd="code" title="Inline code" aria-label="Inline code"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg></button>
+              <span class="sep"></span>
+              <button type="button" data-cmd="insertUnorderedList" title="Bullet list" aria-label="Bullet list"><svg viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1.3" class="fill"/><circle cx="4" cy="12" r="1.3" class="fill"/><circle cx="4" cy="18" r="1.3" class="fill"/></svg></button>
+              <button type="button" data-cmd="insertOrderedList" title="Numbered list" aria-label="Numbered list"><svg viewBox="0 0 24 24"><path d="M10 6h11M10 12h11M10 18h11M4 4.5v4M3 18.5h3l-3 2h3M3.5 13.5c0-1 .6-1.5 1.3-1.5s1.2.5 1.2 1.1c0 1-2.5 1.9-2.5 2.9h2.6"/></svg></button>
+              <button type="button" data-cmd="checklist" title="Checklist: click a box to tick it" aria-label="Checklist"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="6" height="6" rx="1"/><rect x="3" y="14" width="6" height="6" rx="1"/><path d="M4.5 17l1.2 1.2L8 15.5M13 7h8M13 17h8"/></svg></button>
+              <button type="button" data-cmd="outdent" title="Move item left" aria-label="Move item left"><svg viewBox="0 0 24 24"><path d="M21 6H11M21 12H11M21 18H11M7 9l-3 3 3 3"/></svg></button>
+              <button type="button" data-cmd="indent" title="Move item right" aria-label="Move item right"><svg viewBox="0 0 24 24"><path d="M21 6H11M21 12H11M21 18H11M4 9l3 3-3 3"/></svg></button>
+              <span class="sep"></span>
+              <button type="button" data-cmd="justifyLeft" title="Align left" aria-label="Align left"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 10h12M3 14h18M3 18h12"/></svg></button>
+              <button type="button" data-cmd="justifyCenter" title="Centre" aria-label="Centre"><svg viewBox="0 0 24 24"><path d="M3 6h18M6 10h12M3 14h18M6 18h12"/></svg></button>
+              <button type="button" data-cmd="justifyRight" title="Align right" aria-label="Align right"><svg viewBox="0 0 24 24"><path d="M3 6h18M9 10h12M3 14h18M9 18h12"/></svg></button>
+              <span class="sep"></span>
+              <button type="button" data-cmd="insertHorizontalRule" title="Divider" aria-label="Divider"><svg viewBox="0 0 24 24"><path d="M3 12h3M9 12h6M18 12h3"/></svg></button>
+              <button type="button" data-cmd="removeFormat" title="Clear formatting" aria-label="Clear formatting"><svg viewBox="0 0 24 24"><path d="M4 7V5h14v2M11 5l-3 14M7 19h6M15 14l5 5M20 14l-5 5"/></svg></button>
+            </div>
+            <div class="editor" id="editor" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"
+                 aria-label="Text to print" data-placeholder="Write something to print. Use the toolbar for headings, bold, lists and tick boxes."></div>
+            <div class="pane-actions">
+              <button type="button" class="btn quiet" id="docClear">Clear</button>
+              <button type="button" class="btn quiet" id="docSaveTemplate">Save for later</button>
+            </div>
+          </div>
+
+          <details class="format" id="formatCard">
+            <summary>
+              <span>Format</span>
+              <span class="format-summary" id="formatSummary"></span>
+            </summary>
+            <form class="format-form" id="formatForm">
+              <fieldset class="seg-field">
+                <legend>Font</legend>
+                <div class="seg">
+                  <label><input type="radio" name="font" value="sans"><span>Sans</span></label>
+                  <label><input type="radio" name="font" value="serif"><span class="serif">Serif</span></label>
+                  <label><input type="radio" name="font" value="mono"><span class="mono">Mono</span></label>
+                </div>
+              </fieldset>
+              <fieldset class="seg-field">
+                <legend>Alignment</legend>
+                <div class="seg">
+                  <label><input type="radio" name="align" value="left"><span>Left</span></label>
+                  <label><input type="radio" name="align" value="center"><span>Centre</span></label>
+                  <label><input type="radio" name="align" value="right"><span>Right</span></label>
+                </div>
+              </fieldset>
+              <label class="range">Text size <output data-for="size"></output>
                 <input type="range" name="size" min="12" max="72" step="1">
               </label>
-              <label>Line spacing <span class="val" data-for="line_spacing"></span>
+              <label class="range">Line spacing <output data-for="line_spacing"></output>
                 <input type="range" name="line_spacing" min="0.7" max="2.5" step="0.05">
               </label>
-              <label>Paragraph spacing <span class="val" data-for="paragraph_spacing"></span>
+              <label class="range">Paragraph spacing <output data-for="paragraph_spacing"></output>
                 <input type="range" name="paragraph_spacing" min="0" max="60" step="1">
               </label>
-              <label>Side margins <span class="val" data-for="margin"></span>
+              <label class="range">Side margins <output data-for="margin"></output>
                 <input type="range" name="margin" min="0" max="60" step="1">
               </label>
               <label>Border
@@ -125,243 +146,251 @@
                   <option value="rounded">Rounded</option>
                 </select>
               </label>
-            </div>
-            <div class="checks">
-              <label class="check"><input type="checkbox" name="timestamp"> Date &amp; time footer</label>
-              <label class="check"><input type="checkbox" name="invert"> White on black</label>
-            </div>
-            <div class="actions">
-              <button type="button" class="btn ghost" id="formatReset">Use saved default</button>
-              <button type="button" class="btn" id="formatSave">Save as default</button>
-            </div>
-          </form>
-        </details>
-
-        <div class="card preview-card">
-          <div class="preview-head"><h2>Preview</h2><span class="muted">updates as you type</span></div>
-          <div class="paper"><img id="docPreview" alt="What will print" hidden></div>
-          <p class="empty" id="docPreviewEmpty">Start typing to see the print.</p>
+              <div class="toggles">
+                <label class="switch"><input type="checkbox" name="timestamp"><span>Date and time at the bottom</span></label>
+                <label class="switch"><input type="checkbox" name="invert"><span>White on black</span></label>
+              </div>
+              <div class="format-actions">
+                <button type="button" class="btn quiet" id="formatReset">Use my default</button>
+                <button type="button" class="btn" id="formatSave">Make this my default</button>
+              </div>
+            </form>
+          </details>
         </div>
+
+        <!-- Image -->
+        <form class="pane sheet-surface" id="imageForm" data-pane="image" hidden>
+          <label class="drop" id="dropZone">
+            <input type="file" name="file" accept="image/*" required>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 9"/></svg>
+            <span id="dropText">Choose a picture, drop it here or paste it</span>
+          </label>
+          <div class="field-grid">
+            <label>Shading
+              <select name="dither">
+                <option value="atkinson">Atkinson, for photos</option>
+                <option value="floyd">Floyd–Steinberg</option>
+                <option value="ordered">Ordered dots</option>
+                <option value="threshold">Black and white, for text and logos</option>
+              </select>
+            </label>
+            <label class="range">Threshold <output data-for="threshold">150</output>
+              <input type="range" name="threshold" min="40" max="230" value="150">
+            </label>
+            <label class="range">Brightness <output data-for="brightness">1</output>
+              <input type="range" name="brightness" min="0.5" max="1.8" step="0.05" value="1">
+            </label>
+            <label class="range">Contrast <output data-for="contrast">1</output>
+              <input type="range" name="contrast" min="0.5" max="2.5" step="0.05" value="1">
+            </label>
+          </div>
+          <div class="toggles">
+            <label class="switch"><input type="checkbox" name="autolevel" checked><span>Auto-level</span></label>
+            <label class="switch"><input type="checkbox" name="rotate"><span>Turn wide pictures sideways</span></label>
+          </div>
+        </form>
+
+        <!-- QR -->
+        <form class="pane sheet-surface" id="qrForm" data-pane="qr" hidden>
+          <label>Link or text
+            <textarea name="data" rows="3" maxlength="1500" required placeholder="https://example.com"></textarea>
+          </label>
+          <label>Caption
+            <input name="caption" maxlength="500" placeholder="Optional. **Bold** and *italic* work.">
+          </label>
+          <label class="range">Code size <output data-for="scale">1</output>
+            <input type="range" name="scale" min="0.3" max="1" step="0.05" value="1">
+          </label>
+          <div class="pane-actions">
+            <button type="button" class="btn quiet" data-save-template>Save for later</button>
+          </div>
+        </form>
+
+        <!-- Banner -->
+        <form class="pane sheet-surface" id="bannerForm" data-pane="banner" hidden>
+          <label>Banner text
+            <input name="text" maxlength="120" required placeholder="Happy birthday">
+          </label>
+          <fieldset class="seg-field">
+            <legend>Font</legend>
+            <div class="seg">
+              <label><input type="radio" name="font" value="sans" checked><span>Sans</span></label>
+              <label><input type="radio" name="font" value="serif"><span class="serif">Serif</span></label>
+              <label><input type="radio" name="font" value="mono"><span class="mono">Mono</span></label>
+            </div>
+          </fieldset>
+          <p class="hint">Printed sideways along the roll, as tall as the paper is wide.</p>
+        </form>
       </div>
 
-      <!-- Image -->
-      <form class="card stack" id="imageForm" data-pane="image" hidden>
-        <label class="drop" id="dropZone">
-          <input type="file" name="file" accept="image/*" required>
-          <span id="dropText">Choose, drop or paste a picture</span>
-        </label>
-        <div class="grid2">
-          <label>Dither
-            <select name="dither">
-              <option value="atkinson">Atkinson (photos)</option>
-              <option value="floyd">Floyd–Steinberg</option>
-              <option value="ordered">Ordered</option>
-              <option value="threshold">Threshold (text/logos)</option>
-            </select>
-          </label>
-          <label>Threshold <span class="val" data-for="threshold">150</span>
-            <input type="range" name="threshold" min="40" max="230" value="150">
-          </label>
-          <label>Brightness <span class="val" data-for="brightness">1.0</span>
-            <input type="range" name="brightness" min="0.5" max="1.8" step="0.05" value="1">
-          </label>
-          <label>Contrast <span class="val" data-for="contrast">1.0</span>
-            <input type="range" name="contrast" min="0.5" max="2.5" step="0.05" value="1">
-          </label>
-        </div>
-        <div class="checks">
-          <label class="check"><input type="checkbox" name="autolevel" checked> Auto-level</label>
-          <label class="check"><input type="checkbox" name="rotate"> Rotate landscape</label>
-        </div>
-        <img class="inline-preview" id="imagePreview" alt="Print preview" hidden>
-        <div class="actions">
-          <label class="copies">Copies <input type="number" name="copies" min="1" max="20" value="1"></label>
-          <button type="submit" class="btn primary">Print</button>
-        </div>
-      </form>
-
-      <!-- QR -->
-      <form class="card stack" id="qrForm" data-pane="qr" hidden>
-        <label>QR content <small>(URL, Wi-Fi string, text…)</small>
-          <textarea name="data" rows="3" maxlength="1500" required placeholder="https://example.com"></textarea>
-        </label>
-        <label>Caption <small>(optional, **bold** and *italic* work)</small>
-          <input name="caption" maxlength="500" placeholder="Scan me">
-        </label>
-        <label>QR size <span class="val" data-for="scale">1</span>
-          <input type="range" name="scale" min="0.3" max="1" step="0.05" value="1">
-        </label>
-        <div class="actions spread">
-          <button type="button" class="btn ghost" data-save-template>Save as template</button>
-          <div class="actions">
-            <label class="copies">Copies <input type="number" name="copies" min="1" max="20" value="1"></label>
-            <button type="button" class="btn" data-preview>Preview</button>
-            <button type="submit" class="btn primary">Print</button>
+      <!-- the printer: live receipt + print -->
+      <aside class="printer-col" aria-label="Preview and print">
+        <div class="device">
+          <div class="slot">
+            <span class="lamp" aria-hidden="true"></span>
+            <span class="slot-text" id="slotText">Printer</span>
+          </div>
+          <div class="feed" id="feed">
+            <figure class="paper" id="paper">
+              <img id="livePreview" alt="Preview of the print" hidden>
+              <figcaption class="paper-empty" id="paperEmpty">Your print appears here as you type.</figcaption>
+            </figure>
           </div>
         </div>
-      </form>
-
-      <!-- Banner -->
-      <form class="card stack" id="bannerForm" data-pane="banner" hidden>
-        <label>Banner text <small>(printed sideways, as tall as the paper is wide)</small>
-          <input name="text" maxlength="120" required placeholder="HAPPY BIRTHDAY">
-        </label>
-        <label>Font
-          <select name="font">
-            <option value="sans">Sans</option>
-            <option value="serif">Serif</option>
-            <option value="mono">Monospace</option>
-          </select>
-        </label>
-        <div class="actions">
-          <label class="copies">Copies <input type="number" name="copies" min="1" max="20" value="1"></label>
-          <button type="button" class="btn" data-preview>Preview</button>
-          <button type="submit" class="btn primary">Print</button>
+        <div class="print-bar">
+          <div class="stepper" aria-label="Copies">
+            <button type="button" id="copiesDown" aria-label="One copy fewer">−</button>
+            <input type="number" id="copies" min="1" max="20" value="1" aria-label="Copies">
+            <button type="button" id="copiesUp" aria-label="One more copy">+</button>
+          </div>
+          <button type="button" class="btn primary print-btn" id="printBtn" title="Print (Ctrl+Enter)">Print</button>
         </div>
-      </form>
-
-      <div class="card row-actions">
-        <button class="btn" id="testBtn">Test page</button>
-        <button class="btn" id="feedBtn">Feed paper</button>
-      </div>
+        <div class="print-extra">
+          <button type="button" class="link" id="feedBtn">Feed paper</button>
+          <button type="button" class="link" id="testBtn">Print a test page</button>
+        </div>
+      </aside>
     </section>
 
     <!-- HISTORY -->
-    <section class="view" id="view-history" hidden>
+    <section class="view history-view" id="view-history" hidden>
+      <div class="view-head">
+        <h1>History</h1>
+        <p>Everything sent to the printer. Reprint anything with one tap.</p>
+      </div>
       <ul class="job-list" id="jobList"></ul>
-      <p class="empty" id="jobsEmpty" hidden>Nothing printed yet.</p>
+      <p class="empty" id="jobsEmpty" hidden>Nothing printed yet. Your prints will be listed here.</p>
     </section>
 
     <!-- PRINTER -->
-    <section class="view" id="view-printer" hidden>
-      <div class="card stack">
+    <section class="view settings-view" id="view-printer" hidden>
+      <div class="view-head">
+        <h1>Printer</h1>
+      </div>
+
+      <section class="group">
         <div class="printer-head">
           <div>
             <h2 id="printerName">Printer</h2>
             <p class="muted" id="printerMeta">–</p>
           </div>
-          <div class="actions">
+          <div class="row-actions">
             <button class="btn" id="connectBtn">Connect</button>
-            <button class="btn ghost" id="disconnectBtn">Disconnect</button>
+            <button class="btn quiet" id="disconnectBtn">Disconnect</button>
           </div>
         </div>
         <p class="error-text" id="printerError" hidden></p>
-        <div class="actions">
-          <button class="btn" id="scanBtn">Scan for printers</button>
-          <label class="check"><input type="checkbox" id="scanAll"> Show all devices</label>
+        <div class="row-actions">
+          <button class="btn quiet" id="scanBtn">Find printers</button>
+          <label class="switch small"><input type="checkbox" id="scanAll"><span>Show all Bluetooth devices</span></label>
         </div>
         <ul class="device-list" id="deviceList"></ul>
-      </div>
+      </section>
 
-      <form class="card stack" id="settingsForm">
-        <h2>Print tuning</h2>
-        <label>Darkness (energy) <span class="val" data-for="energy"></span>
-          <input type="range" name="energy" min="4000" max="40000" step="20">
-        </label>
-        <div class="grid2">
-          <label>Feed after print
-            <input type="number" name="feed" min="0" max="200">
-          </label>
-          <label>Feed method
-            <select name="feed_mode">
-              <option value="a1">0xA1 dots (SC03h)</option>
-              <option value="bd">0xBD packets (per docs)</option>
-            </select>
-          </label>
-          <label>Row encoding
-            <select name="encoding">
-              <option value="raw-lsb">Raw A2, LSB-first (SC03h)</option>
-              <option value="raw">Raw A2, MSB-first (per docs)</option>
-              <option value="rle">RLE 0xBF (clones)</option>
-            </select>
-          </label>
-          <label>Speed byte
-            <input type="number" name="speed" min="0" max="255">
-          </label>
-          <label>Pull-back slack (dots)
-            <input type="number" name="backlash" min="0" max="64">
-          </label>
-          <label>Printer address
-            <input name="printer_address" placeholder="auto">
-          </label>
-        </div>
-        <label class="check"><input type="checkbox" name="rotate180"> Rotate prints 180° (reads the right way up as it leaves the printer)</label>
-        <label class="check"><input type="checkbox" name="rewind"> Pull paper back before next print (no gaps between prints)</label>
-        <label class="check"><input type="checkbox" name="mirror"> Mirror output</label>
-        <div class="actions">
-          <button type="submit" class="btn primary">Save</button>
-        </div>
-      </form>
-
-      <form class="card stack" id="layoutForm">
+      <form class="group" id="layoutForm">
         <h2>Paper</h2>
-        <div class="chips segmented" id="paperMode">
-          <button type="button" class="chip" data-paper="continuous">Continuous roll</button>
-          <button type="button" class="chip" data-paper="label">Labels</button>
+        <div class="seg wide" id="paperMode">
+          <button type="button" data-paper="continuous">Roll</button>
+          <button type="button" data-paper="label">Labels</button>
         </div>
         <input type="hidden" name="paper">
-        <div class="grid2" data-for-paper="continuous">
-          <label>Space between prints (mm)
+        <div class="field-grid" data-for-paper="continuous">
+          <label>Space between prints, mm
             <input type="number" name="gap" min="0" max="30" step="0.5">
           </label>
-          <label>Separator
+          <label>Line between prints
             <select name="separator">
               <option value="none">None</option>
-              <option value="dashed">Dashed line</option>
-              <option value="solid">Solid line</option>
+              <option value="dashed">Dashed</option>
+              <option value="solid">Solid</option>
             </select>
           </label>
         </div>
-        <div class="grid2" data-for-paper="label" hidden>
-          <label>Label width (mm) <input type="number" name="label_width" min="10" max="48" step="0.5"></label>
-          <label>Label height (mm) <input type="number" name="label_height" min="8" max="200" step="0.5"></label>
-          <label>Gap between labels (mm) <input type="number" name="label_gap" min="0" max="10" step="0.5"></label>
-          <label>Vertical offset (mm) <input type="number" name="label_offset" min="-10" max="10" step="0.5"></label>
+        <div class="field-grid" data-for-paper="label" hidden>
+          <label>Label width, mm <input type="number" name="label_width" min="10" max="48" step="0.5"></label>
+          <label>Label height, mm <input type="number" name="label_height" min="8" max="200" step="0.5"></label>
+          <label>Gap between labels, mm <input type="number" name="label_gap" min="0" max="10" step="0.5"></label>
+          <label>Move down, mm <input type="number" name="label_offset" min="-10" max="10" step="0.5"></label>
         </div>
-        <p class="muted" data-for-paper="label" hidden>For die-cut labels: every print is fitted onto one label, scaled down if needed.</p>
-        <div class="actions">
-          <button type="submit" class="btn primary">Save</button>
-        </div>
+        <p class="hint" data-for-paper="label" hidden>For die-cut label rolls. Each print is fitted onto one label.</p>
+        <div class="group-actions"><button type="submit" class="btn primary">Save paper</button></div>
       </form>
 
-      <details class="card">
+      <form class="group" id="settingsForm">
+        <h2>Print quality</h2>
+        <label class="range">Darkness <output data-for="energy"></output>
+          <input type="range" name="energy" min="4000" max="40000" step="20">
+        </label>
+        <div class="toggles">
+          <label class="switch"><input type="checkbox" name="rotate180"><span>Print upside down, so it reads the right way as it comes out</span></label>
+          <label class="switch"><input type="checkbox" name="rewind"><span>Pull the paper back before each print, so prints join up</span></label>
+          <label class="switch"><input type="checkbox" name="mirror"><span>Mirror prints</span></label>
+        </div>
+        <details class="advanced">
+          <summary>Advanced</summary>
+          <div class="field-grid">
+            <label>Feed after printing, dots
+              <input type="number" name="feed" min="0" max="200">
+            </label>
+            <label>Feed method
+              <select name="feed_mode">
+                <option value="a1">0xA1 dots (SC03h)</option>
+                <option value="bd">0xBD packets</option>
+              </select>
+            </label>
+            <label>Row format
+              <select name="encoding">
+                <option value="raw-lsb">Raw, LSB-first (SC03h)</option>
+                <option value="raw">Raw, MSB-first</option>
+                <option value="rle">Compressed (other models)</option>
+              </select>
+            </label>
+            <label>Speed byte
+              <input type="number" name="speed" min="0" max="255">
+            </label>
+            <label>Pull-back slack, dots
+              <input type="number" name="backlash" min="0" max="64">
+            </label>
+            <label>Printer address
+              <input name="printer_address" placeholder="Found automatically">
+            </label>
+          </div>
+        </details>
+        <div class="group-actions"><button type="submit" class="btn primary">Save print quality</button></div>
+      </form>
+
+      <details class="group log-group">
         <summary>Bluetooth log</summary>
         <pre class="log" id="printerLog"></pre>
-        <button class="btn ghost" id="refreshLog">Refresh</button>
+        <button class="btn quiet" id="refreshLog">Refresh log</button>
       </details>
 
-      <div class="card row-actions">
-        <button class="btn ghost" id="installBtn" hidden>Install app</button>
-        <button class="btn ghost" id="logoutBtn" hidden>Log out</button>
+      <div class="foot">
+        <button class="btn quiet" id="installBtn" hidden>Install app</button>
+        <button class="btn quiet" id="logoutBtn" hidden>Sign out</button>
         <span class="muted" id="versionText"></span>
       </div>
     </section>
   </main>
 
-  <nav class="tabbar" id="tabbar">
-    <button data-go="print" class="active"><svg viewBox="0 0 24 24"><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/></svg>Print</button>
-    <button data-go="history"><svg viewBox="0 0 24 24"><path d="M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg>History</button>
-    <button data-go="printer"><svg viewBox="0 0 24 24"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg>Printer</button>
-  </nav>
-
-  <!-- Preview -->
-  <dialog id="previewDialog" class="sheet">
-    <div class="sheet-head">
-      <h2>Preview</h2>
+  <!-- Test-page preview -->
+  <dialog id="previewDialog" class="dialog">
+    <div class="dialog-head">
+      <h2 id="previewTitle">Preview</h2>
       <button class="icon-btn" id="closePreview" aria-label="Close">✕</button>
     </div>
-    <div class="paper"><img id="previewImg" alt="Print preview"></div>
-    <div class="actions">
+    <div class="dialog-paper"><img id="previewImg" alt="Print preview"></div>
+    <div class="dialog-actions">
       <button class="btn primary" id="previewPrint">Print</button>
     </div>
   </dialog>
 
-  <!-- Login -->
-  <dialog id="loginDialog" class="sheet">
-    <form id="loginForm" class="stack">
-      <h2>Sign in</h2>
-      <p class="muted">Enter the access token set as <code>TP_TOKEN</code> on your server.</p>
-      <input type="password" name="token" autocomplete="current-password" required placeholder="Token">
+  <!-- Sign in -->
+  <dialog id="loginDialog" class="dialog">
+    <form id="loginForm" class="login">
+      <h2>Sign in to your printer</h2>
+      <p class="muted">Enter the access token from <code>TP_TOKEN</code> in your server's <code>.env</code> file.</p>
+      <input type="password" name="token" autocomplete="current-password" required placeholder="Access token" aria-label="Access token">
       <p class="error-text" id="loginError" hidden></p>
       <button class="btn primary" type="submit">Sign in</button>
     </form>
