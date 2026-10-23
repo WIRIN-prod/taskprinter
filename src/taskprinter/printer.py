@@ -16,6 +16,11 @@ from .config import Config
 
 log = logging.getLogger("taskprinter.printer")
 
+# On Linux, make BlueZ discover the printer as an LE device. Dual-mode printers seen by an
+# unfiltered scan get cached as classic Bluetooth, and connecting then fails with
+# "BREDR.ProfileUnavailable". Other platforms ignore this argument.
+LE_ONLY = {"bluez": {"filters": {"Transport": "le"}}}
+
 EventSink = Callable[[str, dict], Awaitable[None] | None]
 Progress = Callable[[float], None]
 
@@ -156,7 +161,7 @@ class BlePrinter(BasePrinter):
 
         await self._set_state("scanning" if not self.connected else self.state)
         try:
-            found = await BleakScanner.discover(timeout=timeout, return_adv=True)
+            found = await BleakScanner.discover(timeout=timeout, return_adv=True, **LE_ONLY)
         finally:
             if self.state == "scanning":
                 await self._set_state("connected" if self.connected else "disconnected")
@@ -182,7 +187,7 @@ class BlePrinter(BasePrinter):
 
         timeout = self.cfg.connect_timeout
         if self.address:
-            device = await BleakScanner.find_device_by_address(self.address, timeout=timeout)
+            device = await BleakScanner.find_device_by_address(self.address, timeout=timeout, **LE_ONLY)
             if device:
                 return device
             self._log(f"{self.address} not seen, scanning by name")
@@ -191,7 +196,7 @@ class BlePrinter(BasePrinter):
             name = device.name or adv.local_name or ""
             return _matches(name, list(adv.service_uuids or []), self.cfg.printer_name)
 
-        return await BleakScanner.find_device_by_filter(match, timeout=timeout)
+        return await BleakScanner.find_device_by_filter(match, timeout=timeout, **LE_ONLY)
 
     def _spawn(self, coro) -> None:
         """Schedule a coroutine from a bleak callback (may run off the loop thread)."""
