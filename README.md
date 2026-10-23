@@ -39,6 +39,9 @@ The host needs a Bluetooth adapter within range of the printer, plus BlueZ:
 
 ```sh
 sudo apt install -y bluez && sudo systemctl enable --now bluetooth
+# The SC03h also speaks classic Bluetooth. Without this, BlueZ connects over BR/EDR and fails.
+sudo sed -i 's/^#\?\s*ControllerMode\s*=.*/ControllerMode = le/' /etc/bluetooth/main.conf
+sudo systemctl restart bluetooth
 git clone https://github.com/WIRIN-prod/taskprinter.git && cd taskprinter
 cp .env.example .env && nano .env      # set TP_TOKEN
 docker compose up -d --build
