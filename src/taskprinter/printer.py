@@ -28,6 +28,14 @@ def _adapter_off(exc: BaseException) -> bool:
     return "POWERED_OFF" in text or "No powered Bluetooth adapters" in text or "org.bluez.Error.NotReady" in text
 
 
+def _transient(exc: BaseException) -> bool:
+    """Link drops and timeouts during connect that usually succeed on a second try."""
+    if isinstance(exc, asyncio.TimeoutError):
+        return True
+    text = str(exc).lower()
+    return "disconnected" in text or "discover services" in text or "in progress" in text or not text
+
+
 EventSink = Callable[[str, dict], Awaitable[None] | None]
 Progress = Callable[[float], None]
 
@@ -252,16 +260,22 @@ class BlePrinter(BasePrinter):
 
         self._loop = asyncio.get_running_loop()
         await self._set_state("connecting")
-        for attempt in (1, 2):
+        powered_on = False
+        for attempt in range(1, 4):
             try:
                 await self._connect_once()
                 break
             except Exception as exc:
                 await self._drop()
-                if attempt == 1 and _adapter_off(exc) and await self._power_on_adapter():
+                if not powered_on and _adapter_off(exc) and await self._power_on_adapter():
+                    powered_on = True
                     await asyncio.sleep(2)
                     continue
-                await self._set_state("error", str(exc))
+                if attempt < 3 and _transient(exc):
+                    self._log(f"Connect attempt {attempt} dropped ({exc or type(exc).__name__}), retrying")
+                    await asyncio.sleep(1.5)
+                    continue
+                await self._set_state("error", str(exc) or f"{type(exc).__name__} while connecting")
                 raise
         self._schedule_idle()
 
